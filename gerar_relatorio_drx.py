@@ -682,7 +682,7 @@ def verificar_fundo(D):
 # COD (Crystallography Open Database)
 # =============================================================================
 def cod_id(ref):
-    """Referências 99 + 7 dígitos do XRDview correspondem ao COD (ex.: 999009666 -> 9009666)."""
+    """Referências 99 + 7 dígitos do XRDanalysis PRO correspondem ao COD (ex.: 999009666 -> 9009666)."""
     s = str(ref).strip()
     return s[2:] if re.fullmatch(r"99\d{7}", s) else None
 
@@ -1648,7 +1648,7 @@ def construir(D, A, saida, logo_png, figs):
     if any(f["fonte_sg"] == "analista" for f in fases):
         origem.append("Grupo espacial/Z de algumas fases foram definidos pelo analista")
     if origem:
-        obs.append("; ".join(origem) + " (não constam nas exportações do XRDview).")
+        obs.append("; ".join(origem) + " (não constam nas exportações do XRDanalysis PRO).")
     obs += A["avisos_cod"]
     obs.append("As exportações não trazem incertezas (desvios-padrão) nem indicam quais parâmetros estruturais "
                "foram refinados.")
@@ -1773,7 +1773,7 @@ def main():
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
-    ap = argparse.ArgumentParser(description="Gera relatório PDF de DRX a partir das exportações do XRDview.")
+    ap = argparse.ArgumentParser(description="Gera relatório PDF de DRX a partir das exportações do XRDanalysis PRO.")
     ap.add_argument("pasta", nargs="?", default=".", help="pasta com os .xlsx e o .hdf5 (+ Info.txt)")
     ap.add_argument("-o", "--saida", help="PDF de saída")
     ap.add_argument("--hdf5", help="arquivo .hdf5 da medição (padrão: achado na pasta)")
