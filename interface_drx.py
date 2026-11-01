@@ -67,6 +67,9 @@ except Exception as exc:
     drx = None
     ERRO_MOTOR = exc
 
+FONTES_RAIO_X = ("Cu", "Co", "Cr", "Mo", "Ag")
+SEM_HDF5 = "— sem HDF5 —"
+
 
 def _ativar_dpi():
     if sys.platform != "win32":
@@ -132,6 +135,7 @@ class AplicativoDRX:
         self.xlsx = []
         self.hdf5s = []
         self.ultimo_pdf = None
+        self.fonte_hdf5 = None
         self.executando = False
         self.fila = queue.Queue()
 
@@ -165,6 +169,9 @@ class AplicativoDRX:
         self.equip_var = tk.StringVar(value="—")
         self.serial_var = tk.StringVar(value="—")
         self.software_var = tk.StringVar(value="—")
+        self.fonte_var = tk.StringVar()
+        self.fonte_status_var = tk.StringVar(
+            value="Informe ou deixe em branco para inferir das planilhas.")
         self.analista_var = tk.StringVar()
         self.info_status_var = tk.StringVar()
         self.resumo_pasta_var = tk.StringVar(value="Nenhuma pasta selecionada.")
@@ -246,14 +253,24 @@ class AplicativoDRX:
                                         command=self._analisar_pasta)
         self.btn_atualizar.grid(row=2, column=2, padx=(8, 0), pady=(8, 0))
 
+        ttk.Label(dados, text="Fonte de raios X").grid(
+            row=3, column=0, sticky="w", padx=(0, 10), pady=(8, 0))
+        self.fonte_combo = ttk.Combobox(
+            dados, textvariable=self.fonte_var, values=FONTES_RAIO_X,
+            state="readonly", width=6)
+        self.fonte_combo.grid(row=3, column=1, sticky="w", pady=(8, 0))
+        ttk.Label(dados, textvariable=self.fonte_status_var,
+                  style="Dica.TLabel", wraplength=520).grid(
+            row=3, column=2, sticky="w", padx=(8, 0), pady=(8, 0))
+
         ttk.Label(dados, textvariable=self.destino_var, style="Dica.TLabel",
-                  wraplength=760).grid(row=3, column=0, columnspan=3,
+                  wraplength=760).grid(row=4, column=0, columnspan=3,
                                        sticky="w", pady=(8, 0))
         self.chk_offline = ttk.Checkbutton(
             dados, text="Não consultar o COD (offline)", variable=self.offline_var)
-        self.chk_offline.grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self.chk_offline.grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 0))
         ttk.Label(dados, text="Sem internet? Marque para usar apenas o cache local.",
-                  style="Dica.TLabel").grid(row=5, column=0, columnspan=3, sticky="w")
+                  style="Dica.TLabel").grid(row=6, column=0, columnspan=3, sticky="w")
 
         acoes = ttk.Frame(corpo)
         acoes.grid(row=2, column=0, sticky="ew")
@@ -312,6 +329,7 @@ class AplicativoDRX:
         software = " ".join(x for x in (self.info.get("software"),
                                         self.info.get("versao")) if x)
         self.software_var.set(software or "—")
+        self.fonte_var.set(self.info.get("fonte") or "")
         self.analista_var.set(self.info.get("analista") or drx.ANALISTA)
         self._definir_comentarios("\n\n".join(self.info.get("textos") or []))
         if erro_info is not None:
@@ -327,6 +345,7 @@ class AplicativoDRX:
             self.info_status_label.configure(style="Aviso.TLabel")
         self.info_original_analista = self.analista_var.get().strip()
         self.info_original_comentarios = self._texto_comentarios()
+        self._atualizar_fonte()
 
     def _definir_comentarios(self, texto):
         estado = self.comentarios_text.cget("state")
@@ -371,6 +390,12 @@ class AplicativoDRX:
         self.hdf5s = []
         self.hdf5_var.set("")
         self.hdf5_combo.configure(values=[], state="disabled")
+        self.fonte_hdf5 = None
+        info_fonte = drx.normalizar_fonte(self.info.get("fonte"))
+        self.fonte_var.set(info_fonte or "")
+        self.fonte_status_var.set(
+            "Padrão do Info.txt" if info_fonte else
+            "Informe ou deixe em branco para inferir das planilhas.")
         self.resumo_pasta_var.set(mensagem)
         self.destino_var.set("O PDF será salvo na pasta selecionada.")
         self.ultimo_pdf = None
@@ -392,17 +417,15 @@ class AplicativoDRX:
                      if not p.name.startswith("~$")]
         self.hdf5s = sorted(pasta.glob("*.hdf5")) + sorted(pasta.glob("*.h5"))
         nomes = [p.name for p in self.hdf5s]
-        self.hdf5_combo.configure(values=nomes)
+        valores = ([SEM_HDF5] + nomes) if nomes else [SEM_HDF5]
+        self.hdf5_combo.configure(values=valores)
         if len(nomes) == 1:
             self.hdf5_var.set(nomes[0])
-            self.hdf5_combo.configure(state="readonly")
         elif nomes:
-            if self.hdf5_var.get() not in nomes:
+            if self.hdf5_var.get() not in valores:
                 self.hdf5_var.set("")
-            self.hdf5_combo.configure(state="readonly")
         else:
-            self.hdf5_var.set("")
-            self.hdf5_combo.configure(state="disabled")
+            self.hdf5_var.set(SEM_HDF5)
         n_xlsx = len(self.xlsx)
         resumo = f"{n_xlsx} planilha{'s' if n_xlsx != 1 else ''} .xlsx"
         if self.hdf5s:
@@ -410,40 +433,74 @@ class AplicativoDRX:
             if len(self.hdf5s) > 1:
                 resumo += " — confirme o arquivo correto"
         else:
-            resumo += " • nenhum HDF5"
+            resumo += " • sem HDF5 (somente planilhas)"
         self.resumo_pasta_var.set(resumo)
         self.destino_var.set(f"O PDF será salvo em: {pasta}")
         self.ultimo_pdf = None
-        self._aplicar_estado()
+        self._atualizar_fonte()
         if self._pode_gerar():
             self.status_var.set("Pasta pronta para gerar.")
-        elif self.xlsx and len(self.hdf5s) > 1 and not self._hdf5_selecionado():
-            self.status_var.set("Escolha o arquivo HDF5 correto.")
+        elif self.xlsx and self.hdf5s and not self.hdf5_var.get().strip():
+            self.status_var.set("Escolha o HDF5 ou 'sem HDF5'.")
         else:
-            self.status_var.set("Selecione uma pasta com planilhas .xlsx e um HDF5.")
+            self.status_var.set("Selecione uma pasta com planilhas .xlsx.")
 
     def _pode_gerar(self):
-        return bool(self.pasta and self.pasta.is_dir() and self.xlsx
-                    and self.hdf5s and self._hdf5_selecionado())
+        if not (self.pasta and self.pasta.is_dir() and self.xlsx):
+            return False
+        if not self.hdf5s:
+            return True
+        nome = self.hdf5_var.get().strip()
+        if not nome:
+            return False
+        return nome == SEM_HDF5 or self._hdf5_selecionado() is not None
 
     def _hdf5_selecionado(self):
         if not self.pasta:
             return None
         nome = self.hdf5_var.get().strip()
-        if not nome:
+        if not nome or nome == SEM_HDF5:
             return None
         caminho = self.pasta / nome
         return caminho if caminho.exists() else None
+
+    def _atualizar_fonte(self):
+        h5 = self._hdf5_selecionado()
+        fonte = None
+        if h5 is not None:
+            try:
+                fonte = drx.normalizar_fonte(
+                    drx.ler_hdf5(h5).get("Source target material"))
+            except (Exception, SystemExit) as exc:
+                self._log(f"\nAviso: não foi possível ler a fonte do HDF5: {exc}\n")
+        self.fonte_hdf5 = fonte
+        if fonte:
+            self.fonte_var.set(fonte)
+            self.fonte_status_var.set("Detectada no HDF5")
+        else:
+            info_fonte = drx.normalizar_fonte(self.info.get("fonte"))
+            atual = self.fonte_var.get().strip()
+            if not atual and info_fonte:
+                self.fonte_var.set(info_fonte)
+                atual = info_fonte
+            if atual:
+                self.fonte_status_var.set(
+                    "Padrão do Info.txt" if atual == info_fonte
+                    else "Selecionada para este relatório")
+            else:
+                self.fonte_status_var.set(
+                    "Informe ou deixe em branco para inferir das planilhas.")
+        self._aplicar_estado()
 
     def _hdf5_alterado(self):
         self.ultimo_pdf = None
         if self.pasta:
             self.destino_var.set(f"O PDF será salvo em: {self.pasta}")
-        self._aplicar_estado()
+        self._atualizar_fonte()
         if self._pode_gerar():
             self.status_var.set("Pasta pronta para gerar.")
-        elif self.xlsx and len(self.hdf5s) > 1:
-            self.status_var.set("Escolha o arquivo HDF5 correto.")
+        elif self.xlsx and self.hdf5s and not self.hdf5_var.get().strip():
+            self.status_var.set("Escolha o HDF5 ou 'sem HDF5'.")
 
     def _aplicar_estado(self):
         ativo = not self.executando
@@ -459,6 +516,10 @@ class AplicativoDRX:
             self.hdf5_combo.configure(state="readonly")
         else:
             self.hdf5_combo.configure(state="disabled")
+        if ativo and not self.fonte_hdf5:
+            self.fonte_combo.configure(state="readonly")
+        else:
+            self.fonte_combo.configure(state="disabled")
         self.btn_gerar.configure(
             state="normal" if ativo and self._pode_gerar() else "disabled")
         self.btn_abrir_pdf.configure(
@@ -480,10 +541,18 @@ class AplicativoDRX:
                 "Planilhas", "A pasta selecionada não contém planilhas .xlsx.",
                 parent=self.root)
             return
+        if self.hdf5s and not self.hdf5_var.get().strip():
+            messagebox.showwarning(
+                "HDF5", "Escolha um arquivo HDF5 ou a opção 'sem HDF5'.",
+                parent=self.root)
+            return
         hdf5 = self._hdf5_selecionado()
-        if hdf5 is None:
-            messagebox.showwarning("HDF5", "Selecione o arquivo .hdf5 da medição.",
-                                   parent=self.root)
+        if (self.hdf5s and self.hdf5_var.get().strip() != SEM_HDF5
+                and hdf5 is None):
+            messagebox.showwarning(
+                "HDF5", "O arquivo HDF5 selecionado não foi encontrado. "
+                        "Atualize a pasta ou escolha outro arquivo.",
+                parent=self.root)
             return
         existentes = sorted(self.pasta.glob("Relatorio_DRX_*.pdf"))
         if existentes:
@@ -498,6 +567,7 @@ class AplicativoDRX:
                 return
         analista = self.analista_var.get().strip()
         comentarios = self._comentarios()
+        fonte = self.fonte_var.get().strip() or None
         offline = self.offline_var.get()
         self.ultimo_pdf = None
         self.destino_var.set(f"Gerando em: {self.pasta}")
@@ -506,10 +576,12 @@ class AplicativoDRX:
         self.progresso.start(12)
         self._log_limpar()
         self._log("Iniciando geração...\n")
+        if hdf5 is None:
+            self._log("HDF5: não fornecido — usando somente planilhas.\n")
         self._aplicar_estado()
         try:
             threading.Thread(target=self._executar,
-                             args=(self.pasta, hdf5, analista, comentarios, offline),
+                             args=(self.pasta, hdf5, fonte, analista, comentarios, offline),
                              daemon=True).start()
         except Exception:
             self.executando = False
@@ -519,13 +591,15 @@ class AplicativoDRX:
             self.status_var.set("Erro ao iniciar a geração.")
             self._mostrar_erro(traceback.format_exc())
 
-    def _executar(self, pasta, hdf5, analista, comentarios, offline):
+    def _executar(self, pasta, hdf5, fonte, analista, comentarios, offline):
         escritor = EscritorFila(self.fila)
         try:
             with contextlib.redirect_stdout(escritor), contextlib.redirect_stderr(escritor):
                 pdf = drx.executar_geracao(
-                    pasta=pasta, hdf5=str(hdf5), info=str(self.info_path),
-                    offline=offline, analista=analista, comentarios=comentarios)
+                    pasta=pasta, hdf5=str(hdf5) if hdf5 is not None else None,
+                    info=str(self.info_path), offline=offline, analista=analista,
+                    comentarios=comentarios, fonte=fonte,
+                    sem_hdf5=hdf5 is None)
             self.fila.put(("ok", str(pdf)))
         except SystemExit as exc:
             codigo = exc.code

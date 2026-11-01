@@ -218,3 +218,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Cache COD
+cod_cache.json
+
+# Test folder
+test/

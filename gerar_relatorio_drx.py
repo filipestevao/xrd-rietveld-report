@@ -35,12 +35,14 @@ COMO USAR
        reconhecida pelo nome da aba: Quantitative - Phase List, PeakList,
        GlobalInstrument, RValue, Relative Mass, PrimaryChart, Differential Chart
        e, opcionalmente, Chebyshev);
-     * o arquivo .hdf5 da medição                                [obrigatório];
+     * o arquivo .hdf5 da medição                                [recomendado];
      * um arquivo Info.txt                                       [opcional].
    Outros arquivos na pasta são ignorados (inclusive PDFs e relatórios já
-   gerados). Os metadados da medição vêm exclusivamente do .hdf5.
+   gerados). O .hdf5 fornece os metadados experimentais; sem ele, o relatório
+   é gerado apenas com as planilhas e o Info.txt.
 2. Execute:   python gerar_relatorio_drx.py Export
-   (opções:  -o Relatorio.pdf   --hdf5 medicao.hdf5   --info Info.txt   --offline)
+   (opções:  -o Relatorio.pdf   --hdf5 medicao.hdf5   --info Info.txt
+             --fonte Cu   --sem-hdf5   --offline)
 
 INTERFACE GRÁFICA
 -----------------
@@ -53,6 +55,7 @@ INFO.TXT (texto simples, não precisa saber Python)
 --------------------------------------------------
    XRDynamic 500 - S/N 12345678        <- linha 1: equipamento e nº de série
    XRDanalysis PRO 1.2.5.3658          <- linha 2: software de análise e versão
+   Fonte: Cu                           <- (opcional) Cu, Co, Cr, Mo ou Ag
    (o S/N do instrumento e o software de análise não existem no .hdf5;
     esses dados só aparecem se o Info.txt existir)
    Analista: Seu Nome                  <- (opcional) nome para o rodapé
@@ -62,7 +65,8 @@ INFO.TXT (texto simples, não precisa saber Python)
 
 DEPENDÊNCIAS
 ------------
-   pip install numpy pandas openpyxl matplotlib reportlab h5py
+   pip install numpy pandas openpyxl matplotlib reportlab pillow
+   HDF5 (opcional): pip install h5py
 FONTES: Roboto-Light/Regular/Medium.ttf numa pasta "fonts" ou ".fonts" ao lado
 do script, na pasta dos dados ou instaladas no sistema. Sem elas usa-se DejaVu Sans.
 """
@@ -165,6 +169,29 @@ for _it in _TAB_ELEM.replace("\n", "").split(";"):
 
 KALFA1 = {"Cu": 1.540593, "Co": 1.788965, "Mo": 0.709319, "Cr": 2.289760,
           "Fe": 1.936041, "Ag": 0.559421}
+
+FONTES_RAIO_X = ("Cu", "Co", "Cr", "Mo", "Ag")
+TOL_FONTE = 0.01  # Å
+
+
+def normalizar_fonte(valor):
+    """Extrai o símbolo de uma fonte de raios X suportada."""
+    if not valor:
+        return None
+    m = re.search(r"(Cu|Co|Cr|Mo|Ag)(?=\s*K|\b)", str(valor), re.I)
+    if not m:
+        return None
+    s = m.group(1)
+    return s[0].upper() + s[1:].lower()
+
+
+def inferir_fonte_por_lambda(lam):
+    """Inferência conservadora da fonte a partir do λ calculado do PeakList."""
+    if lam is None or not np.isfinite(lam):
+        return None
+    fonte = min(FONTES_RAIO_X, key=lambda f: abs(KALFA1[f] - lam))
+    return fonte if abs(KALFA1[fonte] - lam) <= TOL_FONTE else None
+
 
 TRAD = {
     "coupled scan": "Varredura acoplada (θ–2θ)",
@@ -367,7 +394,7 @@ def achar_hdf5(pasta, nome_dados):
 
 
 def ler_hdf5(caminho):
-    """Metadados do .hdf5 da medição (obrigatório)."""
+    """Metadados do .hdf5 da medição (recomendado)."""
     meta = {}
     try:
         import h5py
@@ -441,8 +468,12 @@ def ler_hdf5(caminho):
     put("Source type", val(ins + "source/type"))
     alvo = val(ins + "source/target_material")
     if alvo:
-        m = re.match(r"([A-Z][a-z]?)K\\*([a-z])", str(alvo))
-        put("Source target material", f"{m.group(1)} K{'α' if m.group(2) == 'a' else 'β'}" if m else alvo)
+        m = re.match(r"^\s*([A-Z][a-z]?)\s*K\s*\*?\s*([a-zα]?)", str(alvo), re.I)
+        if m:
+            ka = (m.group(2) or "").lower() in ("", "a", "α")
+            put("Source target material", f"{m.group(1)} K{'α' if ka else 'β'}")
+        else:
+            put("Source target material", alvo)
     put("Source name", val(ins + "source/name"))
     v = val(ins + "source/voltage")
     put("Generator voltage", f"{v / 1000:g} kV" if v is not None else None)
@@ -492,7 +523,7 @@ def ler_info(caminho):
     """Info.txt: linha 1 = equipamento - S/N; linha 2 = software versão;
     'Analista: ...'; texto livre após linha em branco = comentários."""
     info = dict(instrumento=None, serial=None, software=None, versao=None,
-                analista=None, textos=[])
+                fonte=None, analista=None, textos=[])
     if not caminho or not Path(caminho).exists():
         return info
     raw = Path(caminho).read_bytes()
@@ -514,6 +545,14 @@ def ler_info(caminho):
         if m:
             info["analista"] = m.group(1).strip()
             continue
+        m = re.match(r"^(?:fonte|radia\S*|[âa]nodo)\s*[:=]\s*(.+)$", l, re.I)
+        if m:
+            fonte = normalizar_fonte(m.group(1))
+            if fonte:
+                info["fonte"] = fonte
+            else:
+                info["textos"].append(l)
+            continue
         m = re.match(r"^(.*?)\s*[-–—,;|]\s*(?:S\s*/?\s*N|serial(?:\s*number)?|n[úu]mero de s[ée]rie)\s*\.?\s*[:#]?\s*(\S+)\s*$", l, re.I)
         if m and not info["instrumento"]:
             info["instrumento"], info["serial"] = m.group(1).strip(), m.group(2).strip()
@@ -529,6 +568,12 @@ def ler_info(caminho):
         if m:
             info["analista"] = m.group(1).strip()
             continue
+        m = re.match(r"^(?:fonte|radia\S*|[âa]nodo)\s*[:=]\s*(.+)$", l.strip(), re.I)
+        if m:
+            fonte = normalizar_fonte(m.group(1))
+            if fonte:
+                info["fonte"] = fonte
+                continue
         if l.strip():
             par.append(l.strip())
         elif par:
@@ -608,7 +653,7 @@ def get(d, prefixo, padrao=None):
     return padrao
 
 
-def carregar(pasta, hdf5=None, info_txt=None):
+def carregar(pasta, hdf5=None, info_txt=None, fonte=None, sem_hdf5=False):
     arqs = localizar_arquivos(pasta)
     D = {}
     D["fases"] = ler_fases(*arqs["fases"])
@@ -640,16 +685,29 @@ def carregar(pasta, hdf5=None, info_txt=None):
         D["fundo_tipo"] = arqs["fundo"][1]
     verificar_fundo(D)
 
-    # metadados: exclusivamente do HDF5 (+ Info.txt para dados do laboratório)
-    h5 = Path(hdf5) if hdf5 else achar_hdf5(pasta, D["arquivo_dados"])
-    if h5 is None or not Path(h5).exists():
-        achados = sorted(p.name for p in
-                         list(Path(pasta).glob("*.hdf5")) + list(Path(pasta).glob("*.h5")))
-        detalhe = f" Candidatos: {', '.join(achados)}." if achados else ""
-        sys.exit("Erro: .hdf5 da medição não encontrado." + detalhe +
-                 " Indique o arquivo com --hdf5.")
-    D["meta"] = ler_hdf5(h5)
-    D["fontes_meta"] = [Path(h5).name]
+    # metadados: HDF5 quando disponível + Info.txt para dados do laboratório
+    D["meta"] = {}
+    D["fontes_meta"] = []
+    h5 = None
+    if not sem_hdf5:
+        if hdf5:
+            h5 = Path(hdf5)
+            if not h5.is_file():
+                sys.exit(f"Erro: arquivo HDF5 não encontrado: {h5}")
+        else:
+            h5 = achar_hdf5(pasta, D["arquivo_dados"])
+            if h5 is None:
+                achados = sorted(p.name for p in
+                                 list(Path(pasta).glob("*.hdf5")) + list(Path(pasta).glob("*.h5")))
+                if len(achados) > 1:
+                    sys.exit("Erro: vários arquivos HDF5 na pasta (" + ", ".join(achados) +
+                             "). Indique um com --hdf5 ou use --sem-hdf5.")
+        if h5 is not None:
+            D["meta"] = ler_hdf5(h5)
+            D["fontes_meta"] = [Path(h5).name]
+    if not D["meta"]:
+        print("Aviso: HDF5 não fornecido — gerando relatório apenas com as planilhas e o Info.txt.")
+    D["fonte_solicitada"] = normalizar_fonte(fonte)
     if info_txt is None:
         achados = [p for p in Path(pasta).glob("*") if p.name.lower() == "info.txt"]
         info_txt = achados[0] if achados else None
@@ -785,21 +843,44 @@ def analisar(D, pasta_cache, offline=False):
     cm, cf2 = achar_col(pk, "Multiplicity"), achar_col(pk, "F")
     cw, cph = achar_col(pk, "FWHM"), achar_col(pk, "Phase")
 
-    # --- radiação ----------------------------------------------------------
+    # --- radiação e fonte ---------------------------------------------------
     t2 = pk[c2t].to_numpy(float)
     lam_all = 2 * pk[cd].to_numpy(float) * np.sin(np.radians(t2 / 2))
     lam = float(np.median(lam_all[t2 > np.percentile(t2, 70)]))
-    anodo = (D["meta"].get("Source target material", "Cu Kα").split() or ["Cu"])[0]
+    fonte_h5 = normalizar_fonte(D["meta"].get("Source target material"))
+    fonte_solic = normalizar_fonte(D.get("fonte_solicitada"))
+    fonte_info = normalizar_fonte(D["info"].get("fonte"))
+    fonte_inf = inferir_fonte_por_lambda(lam)
+    if fonte_h5:
+        fonte, origem = fonte_h5, "HDF5"
+    elif fonte_solic:
+        fonte, origem = fonte_solic, "interface/CLI"
+    elif fonte_info:
+        fonte, origem = fonte_info, "Info.txt"
+    elif fonte_inf:
+        fonte, origem = fonte_inf, "inferida do PeakList"
+    else:
+        sys.exit("Erro: não foi possível determinar a fonte de raios X. "
+                 "Informe 'Fonte: Cu|Co|Cr|Mo|Ag' no Info.txt ou use --fonte.")
+    A["fonte"], A["fonte_origem"] = fonte, origem
+    A["avisos_fonte"] = []
     geom = D["meta"].get("Beam geometry", "").lower()
     mono = "monochromator" in geom
-    if anodo in KALFA1 and abs(lam - KALFA1[anodo]) < 0.003:
-        l_ = KALFA1[anodo]
+    if abs(lam - KALFA1[fonte]) <= TOL_FONTE:
+        l_ = KALFA1[fonte]
         A["lambda"] = l_
-        A["radiacao"] = (f"{anodo} Kα<sub>1</sub> · λ = {num(l_, 4)}{NBSP}Å" if mono else
-                         f"{anodo} Kα · λ(Kα<sub>1</sub>) = {num(l_, 4)}{NBSP}Å")
+        A["radiacao"] = (f"{fonte} Kα<sub>1</sub> · λ = {num(l_, 4)}{NBSP}Å" if mono else
+                         f"{fonte} Kα · λ(Kα<sub>1</sub>) = {num(l_, 4)}{NBSP}Å")
     else:
         A["lambda"] = lam
-        A["radiacao"] = f"{anodo} · λ ≈ {num(lam, 4)}{NBSP}Å"
+        A["radiacao"] = f"{fonte} · λ medido ≈ {num(lam, 4)}{NBSP}Å"
+        A["avisos_fonte"].append(
+            f"A fonte informada ({fonte}) não confere com o comprimento de onda "
+            f"calculado das reflexões ({num(lam, 4)}{NBSP}Å); confira a fonte usada "
+            "na medição.")
+    if origem == "inferida do PeakList":
+        A["avisos_fonte"].append(
+            f"Fonte de raios X inferida das reflexões do PeakList: {fonte} Kα.")
 
     # --- índices de qualidade ------------------------------------------------
     rv = D["rv"]
@@ -1308,7 +1389,17 @@ def blocos_medicao(meta, info, A, D, S):
         instr = esc(instr)
 
     kv_, kvh = (LARG - 10 * mm) / 2, 40 * mm
-    esq = [Paragraph("Instrumento e fonte", S["h2"])]
+    esq = []
+
+    def secao(titulo, linhas):
+        linhas = [(r, v) for r, v in linhas if v not in (None, "")]
+        if not linhas:
+            return
+        if esq:
+            esq.append(Spacer(1, 3 * mm))
+        esq.append(Paragraph(titulo, S["h2"]))
+        esq.append(kv(linhas, S, kvh, kv_))
+
     tubo = g("Source type")
     tubo = esc(tr(tubo)) if tubo else None
     if tubo and g("Source name"):
@@ -1328,20 +1419,19 @@ def blocos_medicao(meta, info, A, D, S):
         stage_txt = f"{stage_txt} ({cfg})" if stage_txt else cfg
     if stage_txt and g("Sample spinning") == "True" and not re.search(r"rota|spin", stage_txt, re.I):
         stage_txt += ", em rotação"
-    esq.append(kv([
+    secao("Instrumento e fonte", [
         ("Instrumento", instr),
         ("Geometria", esc(tr(g("Beam geometry"))) if g("Beam geometry") else None),
         ("Raio do goniômetro", com_unid("Goniometer radius", "mm")),
-        ("Fonte", tubo),
+        ("Fonte de raios X", A.get("fonte")),
+        ("Tubo de raios X", tubo),
         ("Radiação", A["radiacao"]),
         ("Gerador", kv_gerador),
         ("Porta-amostra", stage_txt),
         ("Último alinhamento", (f"{data_pt(g('Last instrument alignment')):%d/%m/%Y}"
                                 if g("Last instrument alignment") and data_pt(g("Last instrument alignment")) else None)),
-    ], S, kvh, kv_))
+    ])
 
-    esq.append(Spacer(1, 3 * mm))
-    esq.append(Paragraph("Óptica e detector", S["h2"]))
     anti = None
     if g("Anti-scatter slit mode"):
         anti = esc(tr(g("Anti-scatter slit mode")))
@@ -1382,7 +1472,7 @@ def blocos_medicao(meta, info, A, D, S):
         div = str(g("Divergence slit opening")).replace(".", ",")
         if g("Divergence slit type"):
             div += f" (tipo {esc(g('Divergence slit type'))})"
-    esq.append(kv([
+    secao("Óptica e detector", [
         ("Fenda de divergência", div),
         ("Máscara do feixe", com_unid("Beam mask opening", "mm", 1)),
         ("Fenda anti-espalhamento", anti),
@@ -1390,7 +1480,7 @@ def blocos_medicao(meta, info, A, D, S):
         ("Filtro", filtro),
         ("Detector", det),
         ("Redução de fluorescência", ("Ativada" if fluo == "True" else "Desativada") if fluo else None),
-    ], S, kvh, kv_))
+    ])
 
     ini, fim = data_pt(g("Scan start time") or ""), data_pt(g("Scan end time") or "")
     quando = None
@@ -1398,18 +1488,22 @@ def blocos_medicao(meta, info, A, D, S):
         quando = (f"{ini:%d/%m/%Y}, {ini:%H:%M}–{fim:%H:%M}" if ini.date() == fim.date()
                   else f"{ini:%d/%m/%Y %H:%M} – {fim:%d/%m/%Y %H:%M}")
     passo = numero_em(g("2θ step size"))
+    ini_pos, fim_pos = numero_em(g("Start position")), numero_em(g("End position"))
+    if ini_pos is not None and fim_pos is not None:
+        faixa_2t = f"{num(ini_pos, 2)}° – {num(fim_pos, 2)}°"
+    else:
+        faixa_2t = f"{num(D['tt'].min(), 2)}° – {num(D['tt'].max(), 2)}°"
+    passo_dados = float(np.median(np.diff(D["tt"])))
+    passo_exibir = passo if passo is not None else passo_dados
     soft = g("Software")
     if soft:
         soft = re.sub(r"\s+ReleaseVersion$", "", soft)
     analise = f"{info['software']} {info['versao']}" if info.get("software") else None
-    esq.append(Spacer(1, 3 * mm))
-    esq.append(Paragraph("Varredura", S["h2"]))
-    esq.append(kv([
+    secao("Varredura", [
         ("Tipo / modo", (f"{tr(g('Scan type'))} · {tr(g('Scan mode'))}" if g("Scan type") and g("Scan mode") else
                          tr(g("Scan type")) if g("Scan type") else None)),
-        ("Faixa 2θ", (f"{num(numero_em(g('Start position')), 2)}° – {num(numero_em(g('End position')), 2)}°"
-                      if g("Start position") and g("End position") else None)),
-        ("Passo", f"{num(passo, 3)}°" if passo else None),
+        ("Faixa 2θ", faixa_2t),
+        ("Passo", f"{num(passo_exibir, 3)}°"),
         ("Tempo por passo", f"{num(numero_em(g('Time per step')), 1)}{NBSP}s" if g("Time per step") else None),
         ("Duração", duracao_pt(g("Scan duration")) if g("Scan duration") else None),
         ("Data", quando),
@@ -1417,7 +1511,7 @@ def blocos_medicao(meta, info, A, D, S):
         ("Usuário", esc(g("User name")) if g("User name") else None),
         ("Aquisição", esc(soft) if soft else None),
         ("Análise", esc(analise) if analise else None),
-    ], S, kvh, kv_))
+    ])
 
     # --- direita: amostra/experimento, modelo e parâmetros globais ------------
     amostra = []
@@ -1650,6 +1744,10 @@ def construir(D, A, saida, logo_png, figs):
     if origem:
         obs.append("; ".join(origem) + " (não constam nas exportações do XRDanalysis PRO).")
     obs += A["avisos_cod"]
+    obs += A.get("avisos_fonte", [])
+    if not D.get("fontes_meta"):
+        obs.append("O arquivo HDF5 não foi fornecido; as condições completas do instrumento, "
+                   "a data da varredura e outros metadados experimentais podem estar ausentes.")
     obs.append("As exportações não trazem incertezas (desvios-padrão) nem indicam quais parâmetros estruturais "
                "foram refinados.")
     ob = [Paragraph("Observações", S["h2"])] + [Paragraph(o, S["bul"], bulletText="•") for o in obs]
@@ -1735,23 +1833,24 @@ def construir(D, A, saida, logo_png, figs):
 
 # =============================================================================
 def executar_geracao(pasta, saida=None, hdf5=None, info=None, offline=False,
-                     analista=None, comentarios=None):
+                     analista=None, comentarios=None, fonte=None, sem_hdf5=False):
     """Gera o relatório completo e devolve o caminho do PDF."""
     pasta = Path(pasta)
     if not pasta.is_dir():
         sys.exit(f"Erro: pasta '{pasta}' não encontrada.")
     registrar_fontes(pasta)
-    D = carregar(pasta, hdf5, info)
+    D = carregar(pasta, hdf5, info, fonte=fonte, sem_hdf5=sem_hdf5)
     if analista is not None:
         D["info"]["analista"] = analista.strip() or None
     if comentarios is not None:
         if isinstance(comentarios, str):
             comentarios = re.split(r"\n\s*\n", comentarios)
         D["info"]["textos"] = [str(t).strip() for t in comentarios if str(t).strip()]
-    print("Metadados HDF5:", ", ".join(D["fontes_meta"]),
+    print("Metadados HDF5:", ", ".join(D["fontes_meta"]) or "nenhum (somente planilhas)",
           "| Info.txt:", D["info_arq"] or "não encontrado")
     base = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
     A = analisar(D, base, offline)
+    print(f"Fonte de raios X: {A['fonte']} ({A['fonte_origem']})")
 
     figs = {"fig1": para_png(fig_padrao_completo(D, A))}
     f2, info2 = fig_zooms(D, A)
@@ -1774,13 +1873,19 @@ def main():
     except Exception:
         pass
     ap = argparse.ArgumentParser(description="Gera relatório PDF de DRX a partir das exportações do XRDanalysis PRO.")
-    ap.add_argument("pasta", nargs="?", default=".", help="pasta com os .xlsx e o .hdf5 (+ Info.txt)")
+    ap.add_argument("pasta", nargs="?", default=".", help="pasta com os .xlsx (+ .hdf5 e Info.txt opcionais)")
     ap.add_argument("-o", "--saida", help="PDF de saída")
-    ap.add_argument("--hdf5", help="arquivo .hdf5 da medição (padrão: achado na pasta)")
+    grupo_h5 = ap.add_mutually_exclusive_group()
+    grupo_h5.add_argument("--hdf5", help="arquivo .hdf5 da medição (padrão: achado na pasta)")
+    grupo_h5.add_argument("--sem-hdf5", action="store_true",
+                          help="ignorar HDF5 e usar somente as planilhas (+ Info.txt)")
     ap.add_argument("--info", help="caminho do Info.txt (padrão: Info.txt na pasta)")
+    ap.add_argument("--fonte", choices=FONTES_RAIO_X,
+                    help="fonte de raios X usada (padrão: HDF5, Info.txt ou inferência)")
     ap.add_argument("--offline", action="store_true", help="não consultar o COD pela internet")
     a = ap.parse_args()
-    executar_geracao(a.pasta, a.saida, a.hdf5, a.info, a.offline)
+    executar_geracao(a.pasta, a.saida, a.hdf5, a.info, a.offline,
+                     fonte=a.fonte, sem_hdf5=a.sem_hdf5)
 
 
 LOGO_B64 = (
