@@ -120,8 +120,8 @@ class AplicativoDRX:
     def __init__(self, root):
         self.root = root
         self.root.title("Gerador de Relatório DRX")
-        self.root.geometry("900x700")
-        self.root.minsize(780, 600)
+        self.root.geometry("900x840")
+        self.root.minsize(800, 760)
         self.root.protocol("WM_DELETE_WINDOW", self._fechar)
         self.root.report_callback_exception = self._report_callback_exception
         self.root.columnconfigure(0, weight=1)
@@ -192,7 +192,7 @@ class AplicativoDRX:
         corpo = ttk.Frame(self.root, padding=(20, 8, 20, 4))
         corpo.grid(row=1, column=0, sticky="nsew")
         corpo.columnconfigure(0, weight=1)
-        corpo.rowconfigure(3, weight=1)
+        corpo.rowconfigure(3, weight=1, minsize=120)
 
         info = ttk.LabelFrame(corpo, text="Informações do laboratório",
                               padding=(14, 10, 14, 10))
@@ -288,7 +288,7 @@ class AplicativoDRX:
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
         self.log_text = scrolledtext.ScrolledText(
-            log_frame, height=6, wrap="word", state="disabled", font=("Consolas", 9))
+            log_frame, height=8, wrap="word", state="disabled", font=("Consolas", 9))
         self.log_text.grid(row=0, column=0, sticky="nsew")
 
         rodape = ttk.Frame(self.root, padding=(20, 6, 20, 12))
@@ -306,7 +306,7 @@ class AplicativoDRX:
     def _centralizar(self):
         self.root.update_idletasks()
         largura = 900
-        altura = 700
+        altura = 840
         x = max(0, (self.root.winfo_screenwidth() - largura) // 2)
         y = max(0, (self.root.winfo_screenheight() - altura) // 2)
         self.root.geometry(f"{largura}x{altura}+{x}+{y}")
@@ -626,7 +626,6 @@ class AplicativoDRX:
                     self.ultimo_pdf = Path(dado)
                     self.status_var.set(f"Relatório gerado: {self.ultimo_pdf.name}")
                     self.destino_var.set(f"PDF gerado em: {self.ultimo_pdf}")
-                    self._log(f"\nRelatório gerado: {self.ultimo_pdf}\n")
                 elif tipo == "erro":
                     erro = dado
                     self.status_var.set("Erro ao gerar o relatório.")

@@ -215,8 +215,9 @@ reutilizadas sem internet. Use `--offline` (CLI) ou a opção correspondente na
 interface para não fazer consultas.
 
 Se o COD não estiver disponível e os dados não estiverem no cache, o relatório
-é gerado sem essas informações, com aviso no terminal. Para preencher
-manualmente, edite `INFO_FASES` no início de `gerar_relatorio_drx.py`:
+é gerado sem essas informações, com aviso no log e uma observação discreta no
+próprio PDF. Para preencher manualmente, edite `INFO_FASES` no início de
+`gerar_relatorio_drx.py`:
 
 ```python
 INFO_FASES = {"LaBO3": {"grupo_espacial": "Pnma (n.º 62)", "Z": 4}}

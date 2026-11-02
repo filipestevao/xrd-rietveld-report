@@ -937,7 +937,7 @@ def analisar(D, pasta_cache, offline=False):
         "fwhm": fw, "I": 100 * I / I.max()})
 
     # --- fases ---------------------------------------------------------------
-    fases, usou_cod, avisos_cod = [], False, []
+    fases, usou_cod, avisos_cod, cod_ausentes = [], False, [], []
     for idx, f in enumerate(D["fases"]):
         txt, html = formula_bonita(f["formula_raw"])
         key = canon(f["formula_raw"])
@@ -958,6 +958,8 @@ def analisar(D, pasta_cache, offline=False):
                 if not cod_ok:
                     avisos_cod.append(f"A fórmula do CIF do COD {cid} ({cod.get('formula')}) difere da fase "
                                       f"{txt}; grupo espacial e Z do COD não foram usados.")
+            else:
+                cod_ausentes.append(f"{txt} (COD {cid})")
         use = cod if (cod and cod_ok) else {}
         usou_cod = usou_cod or bool(use)
         a, b, c = (float(get(f, x)) for x in ("a [", "b [", "c ["))
@@ -988,6 +990,12 @@ def analisar(D, pasta_cache, offline=False):
             sg=sg_html, Z=Z, M=M, dens=dens, atomos=atomos, orient=orient,
             fonte_sg=("analista" if manual else "COD" if use else None),
             cit=citacao(use) if use else None, B_fixo=bool(Bs) and all(abs(x - 1) < 1e-9 for x in Bs)))
+    if cod_ausentes:
+        avisos_cod.append(
+            "Dados do COD não disponíveis para " + "; ".join(cod_ausentes) +
+            "; grupo espacial e Z foram omitidos quando não havia dados no cache "
+            "ou em INFO_FASES.")
+        print("Aviso: COD sem dados para " + "; ".join(cod_ausentes) + ".")
     A["fases"] = fases
     A["usou_cod"], A["avisos_cod"] = usou_cod, avisos_cod
     A["n_pts"], A["passo"] = len(tt), float(np.median(np.diff(tt)))
