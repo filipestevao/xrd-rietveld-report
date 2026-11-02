@@ -1847,6 +1847,7 @@ def executar_geracao(pasta, saida=None, hdf5=None, info=None, offline=False,
     if not pasta.is_dir():
         sys.exit(f"Erro: pasta '{pasta}' não encontrada.")
     registrar_fontes(pasta)
+    print("Lendo planilhas e metadados...")
     D = carregar(pasta, hdf5, info, fonte=fonte, sem_hdf5=sem_hdf5)
     if analista is not None:
         D["info"]["analista"] = analista.strip() or None
@@ -1856,10 +1857,15 @@ def executar_geracao(pasta, saida=None, hdf5=None, info=None, offline=False,
         D["info"]["textos"] = [str(t).strip() for t in comentarios if str(t).strip()]
     print("Metadados HDF5:", ", ".join(D["fontes_meta"]) or "nenhum (somente planilhas)",
           "| Info.txt:", D["info_arq"] or "não encontrado")
+    n_fases, n_refl = len(D["fases"]), len(D["picos"])
+    print(f"Dados carregados: {n_fases} fase{'s' if n_fases != 1 else ''}, "
+          f"{n_refl} reflex{'ões' if n_refl != 1 else 'ão'}, {len(D['tt'])} pontos.")
     base = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
+    print("Analisando o refinamento...")
     A = analisar(D, base, offline)
     print(f"Fonte de raios X: {A['fonte']} ({A['fonte_origem']})")
 
+    print("Gerando figuras...")
     figs = {"fig1": para_png(fig_padrao_completo(D, A))}
     f2, info2 = fig_zooms(D, A)
     w2, h2 = f2.get_size_inches()
@@ -1870,6 +1876,7 @@ def executar_geracao(pasta, saida=None, hdf5=None, info=None, offline=False,
 
     scan = D["meta"].get("Scan name") or D["arquivo_dados"].rsplit(".", 1)[0]
     saida = Path(saida) if saida else pasta / f"Relatorio_DRX_{so_ascii(scan) or 'DRX'}.pdf"
+    print("Montando o PDF...")
     construir(D, A, saida, base64.b64decode(LOGO_B64), figs)
     print("Relatório gerado:", saida)
     return saida
