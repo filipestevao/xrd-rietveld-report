@@ -29,6 +29,7 @@ Atalho recomendado:
 """
 
 import contextlib
+import json
 import os
 import queue
 import re
@@ -44,6 +45,7 @@ if sys.stderr is None:
     sys.stderr = open(os.devnull, "w", encoding="utf-8")
 
 BASE = Path(__file__).resolve().parent
+CONFIG_PATH = BASE / "interface_config.json"
 if str(BASE) not in sys.path:
     sys.path.insert(0, str(BASE))
 
@@ -132,6 +134,7 @@ class AplicativoDRX:
         self.info_original_analista = ""
         self.info_original_comentarios = ""
         self.pasta = None
+        self.ultima_pasta = None
         self.xlsx = []
         self.hdf5s = []
         self.ultimo_pdf = None
@@ -139,6 +142,7 @@ class AplicativoDRX:
         self.executando = False
         self.fila = queue.Queue()
 
+        self._carregar_config()
         self._configurar_estilo()
         self._criar_variaveis()
         self._construir_ui()
@@ -374,8 +378,32 @@ class AplicativoDRX:
             return
         self._carregar_info(confirmar=True)
 
+    def _carregar_config(self):
+        try:
+            dados = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        except (OSError, ValueError, UnicodeError):
+            return
+        valor = dados.get("ultima_pasta") if isinstance(dados, dict) else None
+        if not isinstance(valor, str):
+            return
+        caminho = Path(valor.strip().strip('"')).expanduser()
+        if caminho.is_dir():
+            self.ultima_pasta = caminho
+
+    def _salvar_config(self, pasta=None):
+        caminho = Path(pasta) if pasta is not None else self.pasta
+        if not caminho or not caminho.is_dir():
+            return
+        try:
+            CONFIG_PATH.write_text(
+                json.dumps({"ultima_pasta": str(caminho)}, ensure_ascii=False, indent=1),
+                encoding="utf-8")
+        except OSError:
+            pass
+
     def _selecionar_pasta(self):
-        inicial = self.pasta if self.pasta and self.pasta.is_dir() else BASE
+        inicial = (self.ultima_pasta if self.ultima_pasta and self.ultima_pasta.is_dir() else
+                   self.pasta if self.pasta and self.pasta.is_dir() else BASE)
         pasta = filedialog.askdirectory(
             parent=self.root, title="Selecione a pasta com os arquivos da medição",
             initialdir=str(inicial), mustexist=True)
@@ -383,6 +411,9 @@ class AplicativoDRX:
             return
         self.pasta_var.set(pasta)
         self._analisar_pasta()
+        if self.pasta and self.pasta.is_dir():
+            self.ultima_pasta = self.pasta
+            self._salvar_config()
 
     def _limpar_pasta(self, mensagem):
         self.pasta = None
@@ -696,6 +727,7 @@ class AplicativoDRX:
                 "Sair", "A geração está em andamento. Deseja fechar mesmo assim?",
                 parent=self.root):
             return
+        self._salvar_config()
         self.root.destroy()
 
 

@@ -222,5 +222,8 @@ __marimo__/
 # Cache COD
 cod_cache.json
 
+# Configuração local da interface (última pasta selecionada)
+interface_config.json
+
 # Test folder
 test/

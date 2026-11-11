@@ -75,6 +75,11 @@ Na interface:
 O PDF é salvo na pasta da medição. A interface oferece botões para abrir o PDF
 gerado e a pasta de destino.
 
+A última pasta selecionada é salva em `interface_config.json`, criado ao lado
+do programa e ignorado pelo Git. Esse caminho é usado como diretório inicial do
+próximo diálogo; se o arquivo não existir ou o caminho não for mais válido, o
+diálogo abre na pasta do programa.
+
 ### Linha de comando
 
 ```bash
