@@ -248,6 +248,13 @@ def sci(x, nd=1):
     return f"{num(man, nd)}×10<super>{str(exp).replace('-', MINUS)}</super>"
 
 
+def massa_com_erro(f, nd=2):
+    err = f.get("massa_err")
+    if err is None or not np.isfinite(err):
+        return num(f.get("massa"), nd)
+    return f"{num(f['massa'], nd)}{NBSP}±{NBSP}{num(err, nd)}"
+
+
 def esc(s):
     return escape(str(s))
 
@@ -834,6 +841,72 @@ def ref_formula_do_pico(txt):
     return partes[0], partes[-1].strip("'\" ")
 
 
+def _coluna_fase(D, fase):
+    for col in D["yfases"]:
+        ref, _ = ref_formula_do_pico(col)
+        if fase.get("ref") and str(fase["ref"]).strip() == str(ref).strip():
+            return col
+    for col in D["yfases"]:
+        _, formula = ref_formula_do_pico(col)
+        if canon(formula) == fase["key"]:
+            return col
+    return None
+
+
+def _fator_berar_lelann(yo, yc, w):
+    a = (yo - yc) * np.sqrt(w)
+    s = float(np.sum(a * a))
+    if len(a) < 3 or s <= 0:
+        return 1.0
+    x = np.zeros_like(a)
+    x[1:] = np.where(a[1:] * a[:-1] > 0, a[1:] ** 2 + a[:-1] ** 2, 0.0)
+    z = np.sqrt(2 * np.pi * x) / (2 + np.sqrt(2 * np.pi * x))
+    spp = float(np.sum((1 - z * z) * a * a))
+    sinais = np.sign(a)
+    ini = 0
+    for i in range(1, len(a) + 1):
+        if i == len(a) or sinais[i] != sinais[ini]:
+            if sinais[ini] != 0:
+                spp += float(np.sum(z[ini:i] * a[ini:i]) ** 2)
+            ini = i
+    return float(max(np.sqrt(max(spp, 0.0) / s), 1.0))
+
+
+def _erros_fracoes_fase(D, fases, chi):
+    if len(fases) < 2:
+        return [None] * len(fases), 1.0
+    cols = [_coluna_fase(D, f) for f in fases]
+    if any(c is None for c in cols):
+        return [None] * len(fases), 1.0
+    X = np.column_stack([D["yfases"][c] - D["bg"] for c in cols])
+    if not np.isfinite(X).all():
+        return [None] * len(fases), 1.0
+    w = 1 / np.clip(D["yo"], 1e-9, None)
+    xw = X * np.sqrt(w)[:, None]
+    try:
+        cov = np.linalg.inv(xw.T @ xw)
+    except np.linalg.LinAlgError:
+        cov = np.linalg.pinv(xw.T @ xw)
+    fator = _fator_berar_lelann(D["yo"], D["yc"], w)
+    try:
+        chi = float(chi)
+    except (TypeError, ValueError):
+        chi = 1.0
+    if not np.isfinite(chi):
+        chi = 1.0
+    cov *= max(chi ** 2, 0.0) * fator ** 2
+    massas = np.array([np.nan if f.get("massa") is None else f["massa"] for f in fases], float)
+    if not np.isfinite(massas).all() or massas.sum() <= 0:
+        return [None] * len(fases), fator
+    massas = massas / massas.sum()
+    jac = np.diag(massas) - np.outer(massas, massas)
+    var = np.diag(jac @ cov @ jac.T)
+    erros = np.sqrt(np.clip(var, 0, None)) * 100
+    if not np.isfinite(erros).all():
+        return [None] * len(fases), fator
+    return [float(e) for e in erros], fator
+
+
 def analisar(D, pasta_cache, offline=False):
     A = {}
     tt, yo, yc, bg = D["tt"], D["yo"], D["yc"], D["bg"]
@@ -997,6 +1070,9 @@ def analisar(D, pasta_cache, offline=False):
             "ou em INFO_FASES.")
         print("Aviso: COD sem dados para " + "; ".join(cod_ausentes) + ".")
     A["fases"] = fases
+    erros, A["berar"] = _erros_fracoes_fase(D, fases, A["chi"])
+    for f, erro in zip(fases, erros):
+        f["massa_err"] = erro
     A["usou_cod"], A["avisos_cod"] = usou_cod, avisos_cod
     A["n_pts"], A["passo"] = len(tt), float(np.median(np.diff(tt)))
     return A
@@ -1248,7 +1324,10 @@ def fig_pizza(A):
             continue
         ang = np.radians((w.theta1 + w.theta2) / 2)
         r = 0.79
-        ax.text(r * np.cos(ang), r * np.sin(ang), f"{num(v, 1)}%", ha="center", va="center",
+        rotulo = f"{num(v, 1)}%"
+        if f.get("massa_err") is not None:
+            rotulo += f"\n±{NBSP}{num(f['massa_err'], 1)}{NBSP}%"
+        ax.text(r * np.cos(ang), r * np.sin(ang), rotulo, ha="center", va="center",
                 fontsize=6.8, color="white", fontweight="medium")
     ax.text(0, 0.07, "Massa", ha="center", va="center", fontsize=7.5, color=COR["cinza"])
     ax.text(0, -0.11, "relativa", ha="center", va="center", fontsize=7.5, color=COR["cinza"])
@@ -1631,7 +1710,7 @@ def construir(D, A, saida, logo_png, figs):
                   + f". Parâmetros de rede: a = {num(f0['a'], 4)}, b = {num(f0['b'], 4)}, "
                     f"c = {num(f0['c'], 4)}{NBSP}Å (V = {num(f0['V'], 2)}{NBSP}Å<super>3</super>). ")
     else:
-        lista = "; ".join(f"<b>{f['html']}</b> ({num(f['massa'], 1)}{NBSP}%)" for f in fases)
+        lista = "; ".join(f"<b>{f['html']}</b> ({massa_com_erro(f)}{NBSP}%)" for f in fases)
         resumo = f"Foram identificadas {len(fases)} fases cristalinas (fração em massa): {lista}. "
     resumo += (f"O refinamento do padrão ({num(D['tt'].min(), 0)}–{num(D['tt'].max(), 0)}° 2θ) convergiu para "
                f"R<sub>wp</sub> = {num(A['Rwp'], 1)}{NBSP}% e χ = {num(A['chi'], 2)}.")
@@ -1661,20 +1740,29 @@ def construir(D, A, saida, logo_png, figs):
             sub_ = " · ".join(x for x in (esc(f["nome"]) if f["nome"] else "", ref_html(f)) if x)
             linhas.append([f'<font name="RB-Chi" color="{cor}">■</font> <b>{f["html"]}</b><br/>'
                            f'<font size="7.5" color="{COR["cinza"]}">{sub_}</font>',
-                           num(f["massa"], 1), num(f["vol"], 1) if np.isfinite(f["vol"]) else "–"])
-        tf = tabela(["Fase", "Massa rel. [%]", "Vol. rel. [%]"], linhas, [58 * mm, 21 * mm, 21 * mm], S,
-                    ["LEFT", "RIGHT", "RIGHT"])
+                           num(f["massa"], 2),
+                           f"±{NBSP}{num(f['massa_err'], 2)}" if f.get("massa_err") is not None else "–",
+                           num(f["vol"], 1) if np.isfinite(f["vol"]) else "–"])
+        tf = tabela(["Fase", "Massa rel. [%]", "Erro estimado [%]", "Vol. rel. [%]"], linhas,
+                    [51 * mm, 20 * mm, 24 * mm, 19 * mm], S,
+                    ["LEFT", "RIGHT", "RIGHT", "RIGHT"])
         pz, wp, hp = figs["pizza"]
-        pie = Image(pz, width=52 * mm, height=52 * mm * hp / wp)
-        story.append(duas_colunas(tf, pie, gap=12 * mm, w_esq=100 * mm))
+        pie = Image(pz, width=49 * mm, height=49 * mm * hp / wp)
+        story.append(duas_colunas(tf, pie, gap=7 * mm, w_esq=114 * mm))
     else:
-        linhas = [[f"<b>{f['html']}</b>", esc(f["nome"]) or "–", ref_html(f), num(f["massa"], 1),
+        linhas = [[f"<b>{f['html']}</b>", esc(f["nome"]) or "–", ref_html(f), num(f["massa"], 2),
+                   f"±{NBSP}{num(f['massa_err'], 2)}" if f.get("massa_err") is not None else "–",
                    num(f["vol"], 1) if np.isfinite(f["vol"]) else "–"] for f in fases]
-        story.append(tabela(["Fase", "Nome", "Referência", "Massa rel. [%]", "Volume rel. [%]"], linhas,
-                            [30 * mm, 56 * mm, 26 * mm, 29 * mm, 29 * mm], S,
-                            ["LEFT", "LEFT", "LEFT", "RIGHT", "RIGHT"]))
-    story.append(Paragraph("Frações relativas à soma das fases incluídas no modelo; conteúdo amorfo e fases não "
-                           "modeladas não são contabilizados.", S["cap"]))
+        story.append(tabela(["Fase", "Nome", "Referência", "Massa rel. [%]", "Erro estimado [%]",
+                             "Volume rel. [%]"], linhas,
+                            [24 * mm, 40 * mm, 24 * mm, 21 * mm, 22 * mm, 21 * mm], S,
+                            ["LEFT", "LEFT", "LEFT", "RIGHT", "RIGHT", "RIGHT"]))
+    cap_fases = ("Frações relativas à soma das fases incluídas no modelo; conteúdo amorfo e fases não "
+                 "modeladas não são contabilizados. ")
+    cap_fases += ("O erro estimado é calculado por mínimos quadrados ponderados e não corresponde ao ESD do "
+                  "refinamento de Rietveld (ver Observações)." if multi else
+                  "No modelo monofásico, a fração é fixada em 100 % e não há erro estimado.")
+    story.append(Paragraph(cap_fases, S["cap"]))
 
     for f in fases:
         ref_txt = None
@@ -1721,8 +1809,23 @@ def construir(D, A, saida, logo_png, figs):
 
     # --- observações automáticas ---------------------------------------------
     obs = ["A fração de 100 % decorre do modelo monofásico adotado; fases minoritárias não incluídas no "
-           "modelo e conteúdo amorfo não são contabilizados." if not multi else
+           "modelo e conteúdo amorfo não são contabilizados; por isso, o erro estimado das frações não se aplica."
+           if not multi else
            "As frações referem-se apenas às fases incluídas no modelo; conteúdo amorfo não é contabilizado."]
+    if multi and any(f.get("massa_err") is not None for f in fases):
+        obs.append(
+            "Erro estimado das frações de fase: mínimos quadrados ponderados sobre "
+            "Y<sub>obs</sub> − fundo ≈ Σ s<sub>i</sub>C<sub>i</sub>, com pesos "
+            "w<sub>i</sub> = 1/Y<sub>obs,i</sub> e C<sub>i</sub> as componentes de fase exportadas "
+            "após a subtração do fundo. A covariância dos fatores de escala foi "
+            "V = χ<super>2</super>(X<super>T</super>WX)<super>−1</super>, em que "
+            "X = [C<sub>i</sub>], W = diag(w<sub>i</sub>) e χ<super>2</super> é o índice global "
+            "do ajuste; os erros foram propagados para as frações em massa normalizadas. A "
+            f"covariância foi multiplicada por f<super>2</super>, com f = {num(A['berar'], 2)} "
+            "(fator de Bérar–Lelann), usado apenas como inflação da covariância para compensar a "
+            "correlação serial dos resíduos, e não como correção independente.")
+        obs.append("O erro estimado é condicional às componentes de fase e ao fundo exportados; não é o ESD "
+                   "do refinamento de Rietveld.")
     t_d, d_d, p_d = A["dmax"]
     regs = [r[2] for r in A["regioes"]]
     obs.append(f"Maior desvio entre Y<sub>obs</sub> e Y<sub>calc</sub>: {num(abs(d_d), 0)} cts em 2θ = "
@@ -1756,8 +1859,8 @@ def construir(D, A, saida, logo_png, figs):
     if not D.get("fontes_meta"):
         obs.append("O arquivo HDF5 não foi fornecido; as condições completas do instrumento, "
                    "a data da varredura e outros metadados experimentais podem estar ausentes.")
-    obs.append("As exportações não trazem incertezas (desvios-padrão) nem indicam quais parâmetros estruturais "
-               "foram refinados.")
+    obs.append("Exceto pelo erro estimado das frações de fase, as exportações não trazem incertezas "
+               "(desvios-padrão) nem indicam quais parâmetros estruturais foram refinados.")
     ob = [Paragraph("Observações", S["h2"])] + [Paragraph(o, S["bul"], bulletText="•") for o in obs]
     story.append(KeepTogether(ob))
 

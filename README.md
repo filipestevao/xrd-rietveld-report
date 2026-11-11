@@ -13,6 +13,8 @@ interface de linha de comando para automação.
 
 - Relatório completo: resumo, condições de medição, quantificação de fases,
   estruturas cristalinas, índices de ajuste, diagnóstico e apêndice de reflexões.
+- Erro estimado das frações de fase por mínimos quadrados ponderados, exibido
+  como valor ± erro e documentado nas observações do relatório.
 - Funciona com HDF5 (recomendado) ou somente com as planilhas `.xlsx`.
 - Fonte de raios X selecionável: Cu, Co, Cr, Mo ou Ag.
 - Gráficos do padrão observado/calculado, fundo, posições de Bragg e diferença.
@@ -247,6 +249,11 @@ A licença das fontes está em `.fonts/OFL.txt`.
 
 - As exportações do XRDanalysis PRO não trazem incertezas (desvios-padrão) nem
   indicam quais parâmetros estruturais foram refinados.
+- O erro estimado das frações de fase é obtido por mínimos quadrados
+  ponderados sobre as componentes de fase exportadas, com covariância
+  `V = χ²(XᵀWX)⁻¹` propagada para as frações em massa e inflada pelo fator de
+  Bérar–Lelann. É uma estimativa condicional, não o ESD do refinamento de
+  Rietveld; ele depende das componentes de fase e do fundo exportados.
 - As frações de fase são relativas apenas às fases incluídas no modelo;
   conteúdo amorfo e fases não modeladas não são contabilizados.
 - Os coeficientes de Chebyshev exportados são verificados. Se não
