@@ -1848,7 +1848,16 @@ def executar_geracao(pasta, saida=None, hdf5=None, info=None, offline=False,
         sys.exit(f"Erro: pasta '{pasta}' não encontrada.")
     registrar_fontes(pasta)
     print("Lendo planilhas e metadados...")
-    D = carregar(pasta, hdf5, info, fonte=fonte, sem_hdf5=sem_hdf5)
+    try:
+        D = carregar(pasta, hdf5, info, fonte=fonte, sem_hdf5=sem_hdf5)
+    except KeyError as exc:
+        detalhe = exc.args[0] if exc.args else str(exc)
+        sys.exit(
+            "As planilhas exportadas pelo XRDanalysis estão incompletas.\n\n"
+            f"{detalhe}\n\n"
+            "Abra o arquivo no XRDanalysis, clique em 'Run' e exporte novamente "
+            "antes de gerar o relatório."
+        )
     if analista is not None:
         D["info"]["analista"] = analista.strip() or None
     if comentarios is not None:

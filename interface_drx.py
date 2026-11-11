@@ -306,7 +306,7 @@ class AplicativoDRX:
     def _centralizar(self):
         self.root.update_idletasks()
         largura = 900
-        altura = 840
+        altura = 780
         x = max(0, (self.root.winfo_screenwidth() - largura) // 2)
         y = max(0, (self.root.winfo_screenheight() - altura) // 2)
         self.root.geometry(f"{largura}x{altura}+{x}+{y}")
