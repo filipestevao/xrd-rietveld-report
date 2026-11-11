@@ -1091,6 +1091,8 @@ def analisar(D, pasta_cache, offline=False):
     erros, A["berar"] = _erros_fracoes_fase(D, fases, A["chi"])
     for f, erro in zip(fases, erros):
         f["massa_err"] = erro
+    fases.sort(key=lambda f: f["massa"] if f.get("massa") is not None and np.isfinite(f["massa"]) else -np.inf,
+               reverse=True)
     A["usou_cod"], A["avisos_cod"] = usou_cod, avisos_cod
     A["n_pts"], A["passo"] = len(tt), float(np.median(np.diff(tt)))
     return A
@@ -1914,12 +1916,12 @@ def construir(D, A, saida, logo_png, figs):
     else:
         paginas = (n + 97) // 98
         por_pag = min(49, max(1, (n + 2 * paginas - 1) // (2 * paginas)))
-    cab = ["#", "h k l", "2θ [°]", "d [Å]", "I/I<sub>1</sub> [%]", "FWHM [°]"]
-    larg = [8 * mm, 15 * mm, 16 * mm, 15 * mm, 15 * mm, 12 * mm]
+    cab = ["#", "h k l", "2θ [°]", "d [Å]", "I/I<sub>1</sub> [%]", f"FWHM{NBSP}[°]"]
+    larg = [8 * mm, 14 * mm, 16 * mm, 14 * mm, 15 * mm, 14 * mm]
     alin = ["LEFT", "CENTER", "RIGHT", "RIGHT", "RIGHT", "RIGHT"]
     if multi:
         cab.insert(1, "Fase")
-        larg = [7 * mm, 13 * mm, 14 * mm, 13.5 * mm, 12 * mm, 11 * mm, 11 * mm]
+        larg = [7 * mm, 12 * mm, 14 * mm, 13 * mm, 11 * mm, 10 * mm, 14 * mm]
         alin.insert(1, "LEFT")
 
     def linhas_refl(df):
