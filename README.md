@@ -213,9 +213,10 @@ resultados quantitativos continuam vindo do refinamento exportado.
 ## COD e modo offline
 
 As referências no formato `99xxxxxxx` das exportações são convertidas para
-identificadores do COD. Por padrão, o programa consulta
-`https://www.crystallography.net` para obter grupo espacial, Z, nome e
-referência bibliográfica ausentes nas planilhas.
+identificadores do COD. Por padrão, o programa consulta, em ordem,
+`https://www.crystallography.net/cod`, `http://www.crystallography.net/cod`
+e `https://cod.psdi.ac.uk` para obter grupo espacial, Z, nome e referência
+bibliográfica ausentes nas planilhas.
 
 As respostas ficam em `cod_cache.json` na pasta do programa e podem ser
 reutilizadas sem internet. Use `--offline` (CLI) ou a opção correspondente na

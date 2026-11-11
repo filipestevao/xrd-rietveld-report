@@ -79,6 +79,7 @@ import logging
 import os
 import re
 import sys
+import time
 import unicodedata
 import urllib.request
 from pathlib import Path
@@ -140,8 +141,13 @@ COR = dict(vermelho="#CC0000", cinza="#666666", cinza_claro="#B3B3B3",
            obs="#2B2B2B")
 NBSP = "\u00a0"
 MINUS = "\u2212"
-COD_URL_CIF = "https://www.crystallography.net/cod/{}.cif"
-COD_URL_PAG = "https://www.crystallography.net/cod/{}.html"
+# Bases tentadas em ordem (a 2ª é só HTTP, caso o TLS do servidor esteja falhando)
+MIRRORS = [
+    "https://www.crystallography.net/cod",
+    "http://www.crystallography.net/cod",
+    "https://cod.psdi.ac.uk",
+]
+PAUSA = 2.0             # s entre fases (evita derrubada por excesso de requisições)
 
 _TAB_ELEM = """
 H 1.008 2.20;He 4.0026 -;Li 6.94 0.98;Be 9.0122 1.57;B 10.81 2.04;C 12.011 2.55;
@@ -800,17 +806,25 @@ def cod_consultar(cid, pasta_cache, offline=False):
         return cache[cid]
     if offline:
         return None
-    try:
-        req = urllib.request.Request(COD_URL_CIF.format(cid),
-                                     headers={"User-Agent": "gerar_relatorio_drx/2.0"})
-        with urllib.request.urlopen(req, timeout=8) as r:
-            txt = r.read().decode("utf-8", "ignore")
-        info = parse_cif(txt)
-        if not info.get("formula"):
-            raise ValueError("CIF sem fórmula")
-    except Exception as e:
-        print(f"Aviso: COD {cid} não consultado ({e.__class__.__name__}); "
-              f"seguindo sem grupo espacial/Z/referência (ou use INFO_FASES).")
+    info, falhas = None, []
+    for base in MIRRORS:
+        url = f"{base.rstrip('/')}/{cid}.cif"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "gerar_relatorio_drx/2.0"})
+            with urllib.request.urlopen(req, timeout=8) as r:
+                txt = r.read().decode("utf-8", "ignore")
+            novo = parse_cif(txt)
+            if not novo.get("formula"):
+                raise ValueError("CIF sem fórmula")
+        except Exception as e:
+            falhas.append(f"{base} ({e.__class__.__name__})")
+            continue
+        info = novo
+        break
+    if info is None:
+        print(f"Aviso: COD {cid} não consultado após as tentativas "
+              f"{'; '.join(falhas)}; seguindo sem grupo espacial/Z/referência "
+              "(ou use INFO_FASES).")
         return None
     cache[cid] = info
     try:
@@ -1011,6 +1025,7 @@ def analisar(D, pasta_cache, offline=False):
 
     # --- fases ---------------------------------------------------------------
     fases, usou_cod, avisos_cod, cod_ausentes = [], False, [], []
+    consulta_cod_anterior = False
     for idx, f in enumerate(D["fases"]):
         txt, html = formula_bonita(f["formula_raw"])
         key = canon(f["formula_raw"])
@@ -1025,7 +1040,10 @@ def analisar(D, pasta_cache, offline=False):
         cid = cod_id(ref)
         cod, cod_ok = None, None
         if cid:
+            if not offline and consulta_cod_anterior:
+                time.sleep(PAUSA)
             cod = cod_consultar(cid, pasta_cache, offline)
+            consulta_cod_anterior = not offline
             if cod:
                 cod_ok = canon(cod.get("formula") or "") == key
                 if not cod_ok:
@@ -1194,7 +1212,7 @@ def _desenhar_padrao(fig, spec, D, A, xlim, ymax=None, legenda=True):
         y0, y1 = 1 - (i + 1) / n + 0.08 / n, 1 - i / n - 0.08 / n
         axt.vlines(pos, y0, y1, color=cor, lw=0.7)
         handles.append(Line2D([], [], ls="none", marker="|", ms=7, mec=cor, mew=0.9))
-        nomes.append("Bragg – " + re.sub(r"(\d+)", r"$_{\1}$", f["txt"]))
+        nomes.append(re.sub(r"(\d+)", r"$_{\1}$", f["txt"]))
     axt.set_ylim(0, 1)
     axt.set_yticks([])
     axt.set_xlim(*xlim)
@@ -1325,8 +1343,6 @@ def fig_pizza(A):
         ang = np.radians((w.theta1 + w.theta2) / 2)
         r = 0.79
         rotulo = f"{num(v, 1)}%"
-        if f.get("massa_err") is not None:
-            rotulo += f"\n±{NBSP}{num(f['massa_err'], 1)}{NBSP}%"
         ax.text(r * np.cos(ang), r * np.sin(ang), rotulo, ha="center", va="center",
                 fontsize=6.8, color="white", fontweight="medium")
     ax.text(0, 0.07, "Massa", ha="center", va="center", fontsize=7.5, color=COR["cinza"])
@@ -1370,7 +1386,7 @@ def estilos():
     S["td_c"] = ParagraphStyle("td_c", fontName="RB-Light", fontSize=7.8, leading=9.2, textColor=colors.black)
     S["kpi_n"] = ParagraphStyle("kpi_n", fontName="RB-Light", fontSize=22, leading=25, textColor=colors.HexColor(COR["vermelho"]))
     S["kpi_t"] = ParagraphStyle("kpi_t", fontName="RB-Light", fontSize=8, leading=10, textColor=colors.HexColor(COR["cinza"]))
-    S["bul"] = ParagraphStyle("bul", parent=S["corpo"], fontSize=8.8, leading=12, leftIndent=11, bulletIndent=0, spaceAfter=2.5)
+    S["bul"] = ParagraphStyle("bul", parent=S["corpo"], fontSize=8.8, leading=14.4, leftIndent=11, bulletIndent=0, spaceAfter=2.5)
     return S
 
 
@@ -1455,7 +1471,8 @@ def imagem(png, w_in, h_in, largura=LARG):
 def ref_html(f):
     """Referência da fase: 'COD 9009666' (link) ou o número bruto."""
     if f["cid"]:
-        return (f'<a href="{COD_URL_PAG.format(f["cid"])}" color="{COR["vermelho"]}">COD {f["cid"]}</a>')
+        base = MIRRORS[0].rstrip("/")
+        return (f'<a href="{base}/{f["cid"]}.html" color="{COR["vermelho"]}">COD {f["cid"]}</a>')
     return esc(f["ref"]) if f["ref"] else "–"
 
 
@@ -1743,8 +1760,8 @@ def construir(D, A, saida, logo_png, figs):
                            num(f["massa"], 2),
                            f"±{NBSP}{num(f['massa_err'], 2)}" if f.get("massa_err") is not None else "–",
                            num(f["vol"], 1) if np.isfinite(f["vol"]) else "–"])
-        tf = tabela(["Fase", "Massa rel. [%]", "Erro estimado [%]", "Vol. rel. [%]"], linhas,
-                    [51 * mm, 20 * mm, 24 * mm, 19 * mm], S,
+        tf = tabela(["Fase", "Massa rel. [%]", f"Erro estimado{NBSP}[%]", "Vol. rel. [%]"], linhas,
+                    [49 * mm, 20 * mm, 26 * mm, 19 * mm], S,
                     ["LEFT", "RIGHT", "RIGHT", "RIGHT"])
         pz, wp, hp = figs["pizza"]
         pie = Image(pz, width=49 * mm, height=49 * mm * hp / wp)
@@ -1753,9 +1770,9 @@ def construir(D, A, saida, logo_png, figs):
         linhas = [[f"<b>{f['html']}</b>", esc(f["nome"]) or "–", ref_html(f), num(f["massa"], 2),
                    f"±{NBSP}{num(f['massa_err'], 2)}" if f.get("massa_err") is not None else "–",
                    num(f["vol"], 1) if np.isfinite(f["vol"]) else "–"] for f in fases]
-        story.append(tabela(["Fase", "Nome", "Referência", "Massa rel. [%]", "Erro estimado [%]",
+        story.append(tabela(["Fase", "Nome", "Referência", "Massa rel. [%]", f"Erro estimado{NBSP}[%]",
                              "Volume rel. [%]"], linhas,
-                            [24 * mm, 40 * mm, 24 * mm, 21 * mm, 22 * mm, 21 * mm], S,
+                            [24 * mm, 40 * mm, 24 * mm, 21 * mm, 26 * mm, 21 * mm], S,
                             ["LEFT", "LEFT", "LEFT", "RIGHT", "RIGHT", "RIGHT"]))
     cap_fases = ("Frações relativas à soma das fases incluídas no modelo; conteúdo amorfo e fases não "
                  "modeladas não são contabilizados. ")
